@@ -242,7 +242,7 @@ snapshots:
     config:
       strategy: timestamp
       updated_at: updated_at
-      dbt_valid_to_current_date: "date('2099-12-31')"
+      dbt_valid_to_current: "date('2099-12-31')"
       snapshot_meta_column_names:
           dbt_valid_to: test_valid_to
           dbt_valid_from: test_valid_from

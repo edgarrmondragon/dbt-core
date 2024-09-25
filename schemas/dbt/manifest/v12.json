@@ -6686,7 +6686,7 @@
                     },
                     "additionalProperties": false
                   },
-                  "dbt_valid_to_current_date": {
+                  "dbt_valid_to_current": {
                     "anyOf": [
                       {
                         "type": "string"
@@ -16501,7 +16501,7 @@
                           },
                           "additionalProperties": false
                         },
-                        "dbt_valid_to_current_date": {
+                        "dbt_valid_to_current": {
                           "anyOf": [
                             {
                               "type": "string"
