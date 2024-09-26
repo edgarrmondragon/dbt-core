@@ -57,6 +57,7 @@ from dbt.contracts.graph.nodes import (
     ResultNode,
     SavedQuery,
     SeedNode,
+    SemanticManifestNode,
     SemanticModel,
     SourceDefinition,
 )
@@ -1141,6 +1142,23 @@ class ManifestLoader:
 
     def process_saved_queries(self, config: RuntimeConfig):
         """Processes SavedQuery nodes to populate their `depends_on`."""
+        # Note: This will also capture various nodes which have been re-parsed
+        # because they refer to some other changed node, so there will be
+        # false positives. Ideally we would compare actual changes.
+        semantic_manifest_changed = False
+        semantic_manifest_nodes: chain[SemanticManifestNode] = chain(
+            self.manifest.saved_queries.values(),
+            self.manifest.semantic_models.values(),
+            self.manifest.metrics.values(),
+        )
+        for node in semantic_manifest_nodes:
+            # Check if this node has been modified in this parsing run
+            if node.created_at > self.started_at:
+                semantic_manifest_changed = True
+                break  # as soon as we run into one changed node we can stop
+        if semantic_manifest_changed is False:
+            return
+
         current_project = config.project_name
         for saved_query in self.manifest.saved_queries.values():
             # TODO:
@@ -1150,10 +1168,17 @@ class ManifestLoader:
 
     def process_model_inferred_primary_keys(self):
         """Processes Model nodes to populate their `primary_key`."""
+        model_to_generic_test_map: Dict[str, List[GenericTestNode]] = {}
         for node in self.manifest.nodes.values():
             if not isinstance(node, ModelNode):
                 continue
-            generic_tests = self._get_generic_tests_for_model(node)
+            if node.created_at < self.started_at:
+                continue
+            if not model_to_generic_test_map:
+                model_to_generic_test_map = self.build_model_to_generic_tests_map()
+            generic_tests: List[GenericTestNode] = []
+            if node.unique_id in model_to_generic_test_map:
+                generic_tests = model_to_generic_test_map[node.unique_id]
             primary_key = node.infer_primary_key(generic_tests)
             node.primary_key = sorted(primary_key)
 
@@ -1425,23 +1450,21 @@ class ManifestLoader:
         write_file(path, json.dumps(self._perf_info, cls=dbt.utils.JSONEncoder, indent=4))
         fire_event(ParsePerfInfoPath(path=path))
 
-    def _get_generic_tests_for_model(
-        self,
-        model: ModelNode,
-    ) -> List[GenericTestNode]:
+    def build_model_to_generic_tests_map(self) -> Dict[str, List[GenericTestNode]]:
         """Return a list of generic tests that are attached to the given model, including disabled tests"""
-        tests = []
+        model_to_generic_tests_map: Dict[str, List[GenericTestNode]] = {}
         for _, node in self.manifest.nodes.items():
-            if isinstance(node, GenericTestNode) and node.attached_node == model.unique_id:
-                tests.append(node)
+            if isinstance(node, GenericTestNode) and node.attached_node:
+                if node.attached_node not in model_to_generic_tests_map:
+                    model_to_generic_tests_map[node.attached_node] = []
+                model_to_generic_tests_map[node.attached_node].append(node)
         for _, nodes in self.manifest.disabled.items():
             for disabled_node in nodes:
-                if (
-                    isinstance(disabled_node, GenericTestNode)
-                    and disabled_node.attached_node == model.unique_id
-                ):
-                    tests.append(disabled_node)
-        return tests
+                if isinstance(disabled_node, GenericTestNode) and disabled_node.attached_node:
+                    if disabled_node.attached_node not in model_to_generic_tests_map:
+                        model_to_generic_tests_map[disabled_node.attached_node] = []
+                    model_to_generic_tests_map[disabled_node.attached_node].append(disabled_node)
+        return model_to_generic_tests_map
 
 
 def invalid_target_fail_unless_test(
